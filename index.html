@@ -1372,22 +1372,37 @@ function openKpiMo(id){
 async function fetchPostKpi(id){
   const post=findPost(id); if(!post?.igPostId)return;
   const tok=ls('pf_tok');
-  try{
-    const metrics='impressions,reach,likes,comments,saved,shares';
-    const r=await fetch(`https://graph.facebook.com/v19.0/${post.igPostId}/insights?metric=${metrics}&access_token=${tok}`);
-    const d=await r.json();
-    if(d.error)throw new Error(d.error.message);
-    const kpi={};
-    (d.data||[]).forEach(m=>{kpi[m.name]=m.values?.[0]?.value||0;});
-    post.kpi=kpi;
-    $('km-like').textContent=fmt(kpi.likes);$('km-com').textContent=fmt(kpi.comments);
-    $('km-reach').textContent=fmt(kpi.reach);$('km-imp').textContent=fmt(kpi.impressions);
-    $('km-save').textContent=fmt(kpi.saved);
-    const eng=kpi.reach>0?(((kpi.likes+kpi.comments+kpi.saved)/kpi.reach)*100).toFixed(2)+'%':'—';
-    $('km-eng').textContent=eng; $('km-share').textContent=fmt(kpi.shares);
-    log(`✅ KPI aggiornati per "${post.file?.name}".`,'ok');
-    renderKpiList();
-  }catch(e){log('❌ KPI: '+e.message,'err');}
+  // Try different metric combinations based on what's available
+  const metricSets=[
+    'impressions,reach,saved,shares',
+    'impressions,reach,saved',
+    'reach,saved',
+    'impressions'
+  ];
+  let kpi=post.kpi||{};
+  let success=false;
+  for(const metrics of metricSets){
+    try{
+      const r=await fetch(`https://graph.facebook.com/v19.0/${post.igPostId}/insights?metric=${metrics}&access_token=${tok}`);
+      const d=await r.json();
+      if(!d.error&&d.data){
+        d.data.forEach(m=>{kpi[m.name]=m.values?.[0]?.value||m.value||0;});
+        success=true; break;
+      }
+    }catch(e2){}
+  }
+  post.kpi=kpi;
+  $('km-like').textContent=fmt(kpi.likes||post.kpi?.likes);
+  $('km-com').textContent=fmt(kpi.comments||post.kpi?.comments);
+  $('km-reach').textContent=fmt(kpi.reach);
+  $('km-imp').textContent=fmt(kpi.impressions);
+  $('km-save').textContent=fmt(kpi.saved);
+  const eng=kpi.reach>0?(((kpi.likes||0)+(kpi.comments||0)+(kpi.saved||0))/kpi.reach*100).toFixed(2)+'%':'—';
+  $('km-eng').textContent=eng;
+  $('km-share').textContent=fmt(kpi.shares);
+  if(success) log(`✅ KPI aggiornati.`,'ok');
+  else log(`⚠️ Insights limitati — servono permessi aggiuntivi su Meta.`,'warn');
+  renderKpiList();
 }
 
 async function refreshAllKpi(){
@@ -1497,18 +1512,9 @@ async function loadIGMediaFromProfile(){
       }
     }
 
-    // Fetch insights per ogni post (reach, impressions, saved)
-    for(const post of [...S.igMediaPosts,...S.history].filter(p=>p.igPostId&&(!p.kpi?.reach))){
-      try{
-        const ri=await fetch(`https://graph.facebook.com/v19.0/${post.igPostId}/insights?metric=impressions,reach,saved&access_token=${tok}`);
-        const di=await ri.json();
-        if(!di.error&&di.data){
-          if(!post.kpi)post.kpi={};
-          di.data.forEach(m2=>{post.kpi[m2.name]=m2.values?.[0]?.value||0;});
-        }
-      }catch(e2){}
-      await sleep(200);
-    }
+    // Note: per-post insights (reach, impressions, saved) require instagram_manage_insights
+    // and may not be available for all posts. Showing like/comment data from media feed instead.
+    // Individual post insights can be refreshed from the KPI modal.
     renderKpiList();
     renderReachChart();
   }catch(e){log('⚠️ Caricamento media IG: '+e.message,'warn');}
